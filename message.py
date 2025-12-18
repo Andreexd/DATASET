@@ -2,41 +2,28 @@ import os
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Conv2D, MaxPooling2D, Dropout, Flatten, Dense, LeakyReLU
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import (Conv2D, MaxPooling2D, Dropout,
                                      GlobalAveragePooling2D, Dense,
                                      LeakyReLU, BatchNormalization)
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import ReduceLROnPlateau
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
 
 # ----------------------------------------------------------------
 # CONFIGURACIÓN DEL SISTEMA
 # ----------------------------------------------------------------
-IMG_SIZE = 128
+IMG_SIZE = 224
 CHANNELS = 3
-BATCH_SIZE = 64  # Reducido para CPU, aumentar a 256 cuando tengas GPU funcionando
+BATCH_SIZE = 32  # Reducido de 128 a 32 para evitar timeout en DirectML
 EPOCHS = 35
 LEARNING_RATE = 0.001
-
-# Configurar TensorFlow para usar GPU eficientemente (comentado temporalmente)
-import tensorflow as tf
-# physical_devices = tf.config.list_physical_devices('GPU')
-# if len(physical_devices) > 0:
-#     tf.config.experimental.set_memory_growth(physical_devices[0], True)
-#     print(f"GPU detectada: {tf.config.experimental.get_device_details(physical_devices[0])}")
-# else:
-#     print("No se detectó GPU, usando CPU")
-print("Usando CPU para entrenamiento")
 
 # Ruta al dataset
 dataset_path = os.path.join(os.getcwd(), 'animals-dataset')
 
 # ----------------------------------------------------------------
-# PASO 1: Configuración de Generadores de Datos (Solución MemoryError)
+# PASO 1: Configuración de Generadores de Datos
 # ----------------------------------------------------------------
 print(f"Configurando generadores desde: {dataset_path}")
 
@@ -51,9 +38,6 @@ train_datagen = ImageDataGenerator(
     zoom_range=0.2
 )
 
-# Generador para test (solo normalización, sin augmentación)
-test_datagen = ImageDataGenerator(rescale=1./255)
-
 # Cargar datos de entrenamiento
 train_generator = train_datagen.flow_from_directory(
     dataset_path,
@@ -62,8 +46,8 @@ train_generator = train_datagen.flow_from_directory(
     class_mode='categorical',
     subset='training',
     shuffle=True,
-    interpolation='bilinear',      # Añadir método de interpolación
-    keep_aspect_ratio=False        # Forzar redimensionamiento exacto, si es True mantiene proporciones y agrega borde negro
+    interpolation='bilinear',
+    keep_aspect_ratio=False
 )
 
 # Cargar datos de validación
@@ -88,7 +72,7 @@ print(f"Imágenes de entrenamiento: {train_generator.samples}")
 print(f"Imágenes de validación: {validation_generator.samples}")
 
 # ----------------------------------------------------------------
-# PASO 2: Definición de la Arquitectura CNN MEJORADA
+# PASO 2: Definición de la Arquitectura CNN
 # ----------------------------------------------------------------
 model = Sequential()
 
@@ -158,18 +142,28 @@ model.compile(
     metrics=['accuracy']
 )
 
-# Callback para reducir learning rate de forma más agresiva
 reduce_lr = ReduceLROnPlateau(
     monitor='val_loss',
-    factor=0.3,              # Reduce LR más agresivamente
-    patience=5,              # Más paciencia para permitir convergencia
+    factor=0.3,
+    patience=5,
     min_lr=1e-8,
     verbose=1
 )
 
-# ELIMINAMOS Early Stopping para que entrene las 35 épocas completas
-# Si quieres usar Early Stopping más tarde, úsalo con patience=15 o más
-print("ENTRENAMIENTO CONFIGURADO PARA 35 ÉPOCAS COMPLETAS (sin Early Stopping)")
+# Calcular class weights para balancear el dataset desbalanceado
+class_counts = {
+    0: 844,   # catarina
+    1: 1063,  # gato
+    2: 979,   # hormiga
+    3: 738,   # perro (menos imágenes)
+    4: 771    # turtle
+}
+total_samples = sum(class_counts.values())
+class_weights = {i: total_samples / (nClasses * count) for i, count in class_counts.items()}
+
+print("\nClass weights aplicados:")
+for i, weight in class_weights.items():
+    print(f"  {class_names[i]}: {weight:.3f}")
 
 print("\nIniciando entrenamiento con generadores...")
 print(f"Steps per epoch calculados: {train_generator.samples // BATCH_SIZE}")
@@ -182,9 +176,8 @@ history = model.fit(
     verbose=1,
     validation_data=validation_generator,
     validation_steps=len(validation_generator),
-    callbacks=[reduce_lr],  # Solo reduce_lr, sin early_stop
-    # use_multiprocessing=True,  # Comentado para evitar problemas en Windows
-    # workers=4  # Comentado temporalmente
+    callbacks=[reduce_lr],
+    class_weight=class_weights
 )
 
 
